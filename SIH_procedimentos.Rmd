@@ -1,0 +1,88 @@
+---
+title: "Contagem de procedimentos"
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+if (!require(RODBC)) { install.packages(RODBC); require(RODBC) }
+
+dremio_host <- "200.137.215.27"
+dremio_port <- "31010"
+dremio_uid <- "***"
+dremio_pwd <- "***"
+
+channel <- odbcDriverConnect(sprintf("DRIVER=Dremio Connector;HOST=%s;PORT=%s;UID=%s;PWD=%s;AUTHENTICATIONTYPE=Basic Authentication;CONNECTIONTYPE=Direct", dremio_host, dremio_port, dremio_uid, dremio_pwd))
+
+options(scipen = 999)
+
+```
+
+Baixando bases de apoio
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(readxl)
+
+sigtap <- sqlQuery(channel, "SELECT CO_PROCEDIMENTO, NO_PROCEDIMENTO, DT_COMPETENCIA
+                             FROM Dados.sigtap.tb_procedimento
+                             WHERE DT_COMPETENCIA = '202109'", as.is = c(TRUE)) %>% 
+          janitor::clean_names()
+
+
+municipios <- sqlQuery(channel, 'SELECT * FROM "Analytics Layer".Territorial."Municípios - Hierarquia Completa"') %>% select(regiao, uf, uf_sigla, cod_municipio, municipio_pad, latitude, longitude) %>% 
+                mutate(id_regiao = as.character(str_sub(cod_municipio, end = 1))) %>% 
+                mutate(cod_municipio = as.character(cod_municipio))
+
+populacao <- sqlQuery(channel, 'SELECT * FROM "Analytics Layer".Territorial."População por Estado e Ano"
+                                WHERE ANO = 2020')
+
+populacao <- populacao %>% 
+                mutate(id_regiao = str_sub(cod_uf, end = 1))
+
+populacao_regiao <- populacao %>% 
+                        group_by(regiao_pad, id_regiao) %>% 
+                        summarise(populacao = sum(populacao))
+
+```
+
+# Consulta ao datalake 
+
+```{r}
+consulta1 <- ("SELECT ANO_CMPT, MES_CMPT, MUNIC_RES, MUNIC_MOV, PROC_REA, DT_INTER, competencia, COUNT(*) AS total  
+               FROM Dados.sih.RD
+               WHERE ANO_CMPT = 2020 OR (ANO_CMPT = 2021 AND MES_CMPT < 04)
+               GROUP BY ANO_CMPT, MES_CMPT, MUNIC_RES, MUNIC_MOV, PROC_REA, DT_INTER, uf, competencia, MUNIC_MOV")
+
+procedimentos20 <- sqlQuery(channel,consulta1, as.is=c(TRUE))
+```
+
+# Tratando dados e calculando indicadores
+
+Fizemos este tratamento para excluir internações de 2020 que eventualmente encontravam-se em 2021. Tal procedimento é padrão no tratamento do SIH. 
+
+```{r message=FALSE, warning=FALSE}
+
+procedimentos20_t <- procedimentos20 %>% 
+                        janitor::clean_names() %>% 
+                        mutate(ano_internacao = as.integer(str_sub(dt_inter, start = 1, end = 4))) %>% 
+                        filter(ano_internacao == 2020) %>% 
+                        mutate(total = as.integer(total)) %>% 
+                        left_join(municipios, by = c("munic_res" = "cod_municipio")) %>% 
+                        group_by(ano_cmpt, regiao, id_regiao, proc_rea) %>% 
+                        summarise(total = sum(total)) %>% 
+                        left_join(sigtap, by = c("proc_rea"="co_procedimento")) %>% 
+                        select(-dt_competencia) %>% 
+                        left_join(populacao_regiao, by = "id_regiao") %>% 
+                        mutate(razao_procedimento_pop = (total/populacao)*100000)
+```
+
+
+
+```{r}
+writexl::write_xlsx(procedimentos20_t, "procedimentos.xlsx")
+```
+
+
+
+
+
