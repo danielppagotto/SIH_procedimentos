@@ -7,6 +7,8 @@ output: html_notebook
 library(tidyverse)
 if (!require(RODBC)) { install.packages(RODBC); require(RODBC) }
 
+setwd("~/GitHub/SIH_procedimentos")
+
 dremio_host <- "200.137.215.27"
 dremio_port <- "31010"
 dremio_uid <- ""
@@ -84,9 +86,34 @@ procedimentos20_t <- procedimentos20 %>%
 ```
 
 
+Calculando indicadores por grupo de procedimentos
+
+```{r message=FALSE, warning=FALSE}
+
+procedimentos20_grupo <- procedimentos20 %>% 
+                        janitor::clean_names() %>% 
+                        mutate(ano_internacao = as.integer(str_sub(dt_inter, start = 1, end = 4))) %>% 
+                        filter(ano_internacao == 2020) %>% 
+                        mutate(total = as.integer(total)) %>% 
+                        left_join(municipios, by = c("munic_res" = "cod_municipio")) %>% 
+                        mutate(grupo_sigtap = str_sub(proc_rea, 1, 2)) %>% 
+                        left_join(grupo_sigtap, by = c("grupo_sigtap"="grupo")) %>% 
+                        group_by(ano_cmpt, regiao, id_regiao, grupo_sigtap, descricao) %>% 
+                        summarise(total = sum(total)) %>% 
+                        left_join(populacao_regiao, by = "id_regiao") %>% 
+                        mutate(razao_procedimento_pop = (total/populacao)*100000)
+
+```
+
+
+
+
+
+
 
 ```{r}
 writexl::write_xlsx(procedimentos20_t, "procedimentos.xlsx")
+writexl::write_xlsx(procedimentos20_grupo, "procedimentos_grupo.xlsx")
 ```
 
 
